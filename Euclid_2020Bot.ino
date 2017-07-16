@@ -29,12 +29,8 @@
 *******************************************************************************/
 
 #include <ros.h>
-#include <geometry_msgs/Twist.h>
-#include <std_msgs/Float32.h>
+#include <std_msgs/Int16.h>
 #include <std_msgs/Bool.h>
-
-#define MIN(x,y) ((x) < (y) ? (x) : (y))
-#define MAX(x,y) ((x) > (y) ?( x) : (y))
 
 
 const uint8_t LeftAPin = 10;
@@ -47,14 +43,6 @@ ros::NodeHandle  nh;
 
 //Published Message
 
-//default gains
-float forwardMultiply = 1;
-float backwardMultiply = 1;
-float rotationMultiply = 1;
-float leftGain = 1;
-float rightGain = 1;
-
-
 //Arduino periodicaly tries to connect to ROS, When a handshake is recieved it stops.
 bool isReady = false;
 void setIsReady(bool status){
@@ -62,105 +50,69 @@ void setIsReady(bool status){
   digitalWrite(13, status == false ? 0 : 1);
 }    
 
-//Callback function for the cmd_vel topic messges.
-void messageCb( const geometry_msgs::Twist& msg) {
-  static int lastLeft = 0;
-  static int lastRight = 0;
+bool gotMessage = false;
+
+void setLeft( const std_msgs::Int16& msg) {
+  static int16_t lastLeft = 0;
+  int16_t leftSpeed;
   
-  float leftSpeed;
-  float rightSpeed;
-
-  const float deadZone = 0.05;
-
-  //  if ( msg.linear.x  <= 0.001 && msg.linear.x >= -0.001) {
-  //    rightSpeed = MIN(msg.angular.z * 255 * rotationMultiply, 255);
-  //    leftSpeed = MIN(msg.angular.z * -255 * rotationMultiply, 255);
-  //  }
-  //  else {
-  //    rightSpeed = MIN(MAX(-255, msg.linear.x * 255.0 + msg.angular.z * 60.0), 255);
-  //    leftSpeed = MIN(MAX(-255, msg.linear.x * 255.0 - msg.angular.z * 60.0), 255);
-  //  }
-
-  if ( (msg.linear.x > deadZone) || (msg.linear.x < -deadZone) ) {
-    leftSpeed = 2.0 * msg.linear.x;
-    rightSpeed = 2.0 * msg.linear.x; 
-  }
-  else {
-    leftSpeed = 0;
-    rightSpeed = 0;
-  }
-
-  if ( (msg.angular.z > (deadZone/2.0)) || (msg.angular.z < -(deadZone/2.0)) ) {
-    leftSpeed += msg.angular.z;
-    rightSpeed -= msg.angular.z; 
-  }
+  gotMessage = true;
   
-  leftSpeed *= 127.5;
-  rightSpeed *= 127.5;
+  leftSpeed = msg.data;
 
-  if ((int)(leftSpeed) != lastLeft) {
-    if (leftSpeed > 0.0) {
-      analogWrite(LeftAPin, (int)leftSpeed);
+  if (leftSpeed != lastLeft) {
+    lastLeft = leftSpeed;
+    if (leftSpeed > 0) {
+      leftSpeed = min(leftSpeed, 255);
+      analogWrite(LeftAPin, leftSpeed);
       analogWrite(LeftBPin, 0);
     }
     else {
+      leftSpeed = min(-leftSpeed, 255);
       analogWrite(LeftAPin, 0);
-      analogWrite(LeftBPin, -(int)leftSpeed);
+      analogWrite(LeftBPin, leftSpeed);
     }
-    lastLeft = (int)(leftSpeed);
   }
+}
 
-  if ((int)(rightSpeed) != lastRight) {
-    if (rightSpeed > 0.0) {
-      analogWrite(RightAPin, (int)rightSpeed);
+void setRight( const std_msgs::Int16& msg) {
+  static int16_t lastRight = 0;
+  int16_t rightSpeed;
+
+  gotMessage = true;
+  
+  rightSpeed = msg.data;
+
+  if (rightSpeed != lastRight) {
+    lastRight = rightSpeed;  
+    if (rightSpeed > 0) {
+      rightSpeed = min(rightSpeed, 255);
+      analogWrite(RightAPin, rightSpeed);
       analogWrite(RightBPin, 0);
     }
     else {
+      rightSpeed = min(-rightSpeed, 255);
       analogWrite(RightAPin, 0);
-      analogWrite(RightBPin, -(int)rightSpeed);
+      analogWrite(RightBPin, rightSpeed);
     }
-    lastRight = (int)(rightSpeed);
   }
 }
 
-//callback functions for the forward/backward/rotaion/right/left gains.
 
-void setForwardMul( const std_msgs::Float32& msg) {
-  //When a message is recieved set connected = true
-  setIsReady(true);
-  forwardMultiply = msg.data;
+void stopMotors() {
+  analogWrite(LeftAPin, 0);     
+  analogWrite(LeftBPin, 0);     
+  analogWrite(RightAPin, 0);     
+  analogWrite(RightBPin, 0);
 }
-
-void setBackwardMul( const std_msgs::Float32& msg) {
-  backwardMultiply = msg.data;
-}
-
-void setRotationMul( const std_msgs::Float32& msg) {
-  rotationMultiply = msg.data;
-}
-
-void setRightGain( const std_msgs::Float32& msg) {
-  rightGain = msg.data;
-}
-void setLeftGain( const std_msgs::Float32& msg) {
-  leftGain = msg.data;
-}
-
 
 //Declaration of the publisher
 std_msgs::Bool arduinoRegisterMessage;
-ros::Publisher mArduinoStatusPub("/arduino_ready", &arduinoRegisterMessage);
-
-//declaration of the command velocity topic subscriber
-ros::Subscriber<geometry_msgs::Twist> sub("/cmd_vel_mux/input/teleop", messageCb );
+ros::Publisher mArduinoStatusPub("/bot2020/ready", &arduinoRegisterMessage);
 
 //subscribers declaration for the gain settings
-ros::Subscriber<std_msgs::Float32> sub1("/set_forward_multiply", setForwardMul );
-ros::Subscriber<std_msgs::Float32> sub2("/set_backward_multiply", setBackwardMul );
-ros::Subscriber<std_msgs::Float32> sub3("/set_rotation_multiply", setRotationMul );
-
-ros::Subscriber<std_msgs::Float32> sub4("/set_right_gain", setRightGain );
-ros::Subscriber<std_msgs::Float32> sub5("/set_left_gain", setLeftGain );
+ros::Subscriber<std_msgs::Int16> sub("/bot2020/left_motor", setLeft );
+ros::Subscriber<std_msgs::Int16> sub1("/bot2020/right_motor", setRight );
 
 
 void setup() {
@@ -178,26 +130,41 @@ void setup() {
   //Subscribing to the different topics, defined above
   nh.subscribe(sub);
   nh.subscribe(sub1);
-  nh.subscribe(sub2);
-  nh.subscribe(sub3);
-  nh.subscribe(sub4);
-  nh.subscribe(sub5);
+
 
   pinMode(13, OUTPUT);
   digitalWrite(13, 0);
+
+  setIsReady(true);
+
 }
 
-void registerArduino(){
-    arduinoRegisterMessage.data = false;
+void registerArduino(bool amReady){
+    arduinoRegisterMessage.data = amReady;
     mArduinoStatusPub.publish(&arduinoRegisterMessage);
-    delay(50);
 }
 
 void loop() {
+  static unsigned long readyTimer = 0;
+  static unsigned long messageTimer = 0;
+  unsigned long now = millis();
+    
   //Register the arduino in ROS and wait for the system to be ready.
-  if (isReady == false) {
-    registerArduino();
+  if (now >= readyTimer) {
+    registerArduino(isReady);
+    readyTimer = now + 1000;
   }
+
+  if (now > messageTimer) {
+    if (gotMessage) {
+      gotMessage = false;
+    }
+    else {
+      stopMotors();
+    }
+    messageTimer = now + 5000;
+  }
+
   nh.spinOnce();  //Allows ROS to run and to send/receive new messages.
 
 }
